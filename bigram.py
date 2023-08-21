@@ -7,13 +7,6 @@ import intel_extension_for_pytorch as ipex
 print(f'Intel PyTorch Extension Version: {ipex.__version__}')
 
 
-# Counter
-start = time.time()
-def counter(message):
-	elapsed = time.time() - start
-	print(f'[ {round(elapsed, 2)}s ] {message}')
-
-
 # Parameters
 device = 'xpu'
 batch_size = 64
@@ -22,7 +15,7 @@ max_iterations = 5000
 eval_interval = 500
 learning_rate = 3e-4
 eval_iterations = 200
-n_embed = 384 # Number of embedding dimensions
+n_embed = 384
 n_head = 6
 n_layer = 6
 dropout = 0.2
@@ -216,17 +209,14 @@ else:
 		optimizer.zero_grad(set_to_none=True)
 		loss.backward()
 		optimizer.step()
-	counter('finished training')
 
 	# Save model
 	torch.save(model.state_dict(), 'model.pt')
 
 
 # Generate from the model
-counter('generating output...')
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
 output = decode(model.generate(context, max_new_tokens=5000)[0].tolist())
-counter('complete')
 print(output)
 
 
