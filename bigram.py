@@ -1,43 +1,37 @@
+import intel_extension_for_pytorch as ipex
 import sys
-import time
+import tiktoken
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-import intel_extension_for_pytorch as ipex
 print(f'Intel PyTorch Extension Version: {ipex.__version__}')
 
 
-# Parameters
-device = 'xpu'
-batch_size = 64
-block_size = 256
-max_iterations = 5000
+device = 'xpu' if torch.xpu.is_available() else ''
+assert device == 'xpu', 'XPU not available'
+batch_size = 32
+block_size = 128
+max_iterations = 10000
 eval_interval = 500
-learning_rate = 3e-4
 eval_iterations = 200
+learning_rate = 3e-4
 n_embed = 384
 n_head = 6
 n_layer = 6
 dropout = 0.2
+output_size = 5000
 torch.manual_seed(1337)
 
 
-# Open dataset
+# Read dataset and tokenize
 with open('foundation.txt', 'r', encoding='utf-8') as f:
 	text = f.read()
-
-
-# Create mappings
-chars = sorted(list(set(text)))
-vocab_size = len(chars)
-stoi = { ch:i for i,ch in enumerate(chars) }
-itos = { i:ch for i,ch in enumerate(chars) }
-encode = lambda s: [stoi[c] for c in s]
-decode = lambda l: ''.join([itos[i] for i in l])
+enc = tiktoken.get_encoding('gpt2')
+vocab_size = enc.n_vocab
 
 
 # Split training and validation sets
-data = torch.tensor(encode(text), dtype=torch.long)
+data = torch.tensor(enc.encode(text), dtype=torch.long)
 n = int(0.9 * len(data))
 train_data = data[:n]
 val_data = data[n:]
@@ -181,7 +175,7 @@ class BigramLanguageModel(nn.Module):
 		return idx
 
 
-# Check if user is loading a pretrained model
+# Check if loading pretrained model
 if len(sys.argv) > 1:
 	print("Loading pretrained model")
 	model = BigramLanguageModel()
@@ -190,18 +184,18 @@ if len(sys.argv) > 1:
 	model.eval()
 
 else:
-	# Create model and PyTorch optimizer
 	model = BigramLanguageModel()
 	model = model.to(device)
 	optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-	#model, optimizer = ipex.optimize(model, optimizer=optimizer)
+	total_memory = torch.xpu.get_device_properties(0).total_memory // 1024 ** 2
 
-	# Training loop
 	for i in range(max_iterations):
-		# Evaluate loss periodically
 		if i % eval_interval == 0 or i == max_iterations-1:
 			losses = estimate_loss()
-			print(f"step {i}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+			allocated = torch.xpu.memory_allocated(0) // 1024 ** 2
+			reserved = torch.xpu.memory_reserved(0) // 1024 ** 2
+			print(f"Step {i}: Training loss {losses['train']:.4f}, Validation loss {losses['val']:.4f}")
+			print(f"Memory: {allocated}MB / {reserved}MB / {total_memory}MB")
 
 		# Sample a batch of data and evaluate loss
 		xb, yb = get_batch('train')
@@ -209,18 +203,13 @@ else:
 		optimizer.zero_grad(set_to_none=True)
 		loss.backward()
 		optimizer.step()
-
-	# Save model
+	
 	torch.save(model.state_dict(), 'model.pt')
 
 
-# Generate from the model
+# Generate output from model and save to file
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
-output = decode(model.generate(context, max_new_tokens=5000)[0].tolist())
-print(output)
-
-
-# Save output to file
+output = enc.decode(model.generate(context, max_new_tokens=output_size)[0].tolist())
 f = open('output.txt', 'w')
 f.write(output)
 f.close()
